@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "install-mcp"
+version = "0.1.0"
+description = "MCP server that manages installation of other MCP servers"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "fastmcp>=0.1.0",
+]
+
+[project.scripts]
+install-mcp = "__main__:main"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["*.py", "mcp-config-update"]

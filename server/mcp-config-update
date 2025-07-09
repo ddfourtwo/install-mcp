@@ -1,0 +1,30 @@
+#!/bin/bash
+# MCP Config Update - Wrapper script for the MCP configuration updater
+# This script is installed to ~/.local/bin/mcp-config-update
+
+# Find the Python script location
+SCRIPT_NAME="mcp_config_updater.py"
+
+# Check multiple possible locations
+if [ -f "$HOME/.local/bin/$SCRIPT_NAME" ]; then
+    # Installed location
+    SCRIPT_PATH="$HOME/.local/bin/$SCRIPT_NAME"
+elif [ -f "$HOME/mcp-servers/install-mcp/$SCRIPT_NAME" ]; then
+    # Alternative install location
+    SCRIPT_PATH="$HOME/mcp-servers/install-mcp/$SCRIPT_NAME"
+elif [ -f "$HOME/mcp-servers/install-mcp/server/$SCRIPT_NAME" ]; then
+    # Server subdirectory location
+    SCRIPT_PATH="$HOME/mcp-servers/install-mcp/server/$SCRIPT_NAME"
+else
+    echo "Error: Could not find MCP config updater script."
+    echo "Expected locations:"
+    echo "  - $HOME/.local/bin/$SCRIPT_NAME"
+    echo "  - $HOME/mcp-servers/install-mcp/$SCRIPT_NAME"
+    echo "  - $HOME/mcp-servers/install-mcp/server/$SCRIPT_NAME"
+    echo ""
+    echo "Please run the Install MCP installer first."
+    exit 1
+fi
+
+# Execute the Python script with all arguments
+exec python3 "$SCRIPT_PATH" "$@"
