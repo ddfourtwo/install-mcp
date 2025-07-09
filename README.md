@@ -54,6 +54,11 @@ Once installed, just ask your AI assistant:
 "Update the GitHub token for my GitHub MCP server"
 ```
 
+## 📖 Documentation
+
+- [Architecture Guide](docs/ARCHITECTURE.md) - Technical overview with diagrams
+- [API Reference](docs/API_REFERENCE.md) - Detailed documentation of all available tools
+
 ## 🛠️ How It Works
 
 Install MCP acts as a package manager for MCP servers:
