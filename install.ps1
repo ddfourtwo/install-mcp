@@ -231,6 +231,7 @@ try {
     $pythonScript = @'
 import json
 import os
+import shutil
 from pathlib import Path
 
 configs = {
@@ -239,6 +240,19 @@ configs = {
     'cursor': Path.home() / 'AppData/Roaming/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json',
     'windsurf': Path.home() / '.codeium/windsurf/mcp_config.json',
 }
+
+# Detect if uv is available
+uv_cmd = shutil.which('uv')
+if uv_cmd:
+    # Use uv if available
+    command = 'uv'
+    args = ['run', '--python', '3.11', '--with', 'mcp>=1.0.0', '--with', 'fastmcp>=0.1.0', str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
+else:
+    # Fallback to python if uv is not available
+    print("⚠️  uv not found in PATH, using python directly")
+    print("   For better dependency management, install uv: https://github.com/astral-sh/uv")
+    command = 'python'
+    args = [str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
 
 updated = []
 for name, path in configs.items():
@@ -256,8 +270,8 @@ for name, path in configs.items():
             config['mcpServers'] = {}
         
         config['mcpServers']['install-mcp'] = {
-            'command': 'uv',
-            'args': ['run', '--python', '3.11', '--with', 'mcp>=1.0.0', '--with', 'fastmcp>=0.1.0', str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
+            'command': command,
+            'args': args
         }
         
         try:

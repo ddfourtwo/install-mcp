@@ -68,6 +68,23 @@ def detect_command_and_args(server_dir: Path) -> tuple[str, List[str]]:
     Returns:
         Tuple of (command, args)
     """
+    # Try to import the uv_detector module if available
+    try:
+        import sys
+        # Add the server directory to path temporarily
+        sys.path.insert(0, str(Path(__file__).parent))
+        from uv_detector import get_portable_mcp_command
+        # Use the portable command detector
+        return get_portable_mcp_command(server_dir.name, server_dir)
+    except ImportError:
+        # Fallback to original detection logic
+        pass
+    finally:
+        # Clean up sys.path
+        if str(Path(__file__).parent) in sys.path:
+            sys.path.remove(str(Path(__file__).parent))
+    
+    # Original detection logic as fallback
     # Check for TypeScript/JavaScript servers
     if (server_dir / "package.json").exists():
         if (server_dir / "build" / "index.js").exists():
@@ -80,9 +97,20 @@ def detect_command_and_args(server_dir: Path) -> tuple[str, List[str]]:
             # Default for npm packages
             return "npx", ["-y", server_dir.name]
     
-    # Check for Python servers with pyproject.toml (use uv run)
-    elif (server_dir / "pyproject.toml").exists() and (server_dir / "meta_mcp_server.py").exists():
-        return "uv", ["run", "--python", "3.11", "--with", "mcp>=1.0.0", "--with", "fastmcp>=0.1.0", str(server_dir / "meta_mcp_server.py")]
+    # Check for Python servers with pyproject.toml
+    elif (server_dir / "pyproject.toml").exists():
+        # For install-mcp, prefer python -m for portability
+        if server_dir.name == "install-mcp" and (server_dir / "__main__.py").exists():
+            return "python3", ["-m", "install_mcp"]
+        # For other pyproject.toml servers, use uv if available
+        elif shutil.which("uv"):
+            if (server_dir / "meta_mcp_server.py").exists():
+                return "uv", ["run", "--python", "3.11", str(server_dir / "meta_mcp_server.py")]
+            elif (server_dir / "server.py").exists():
+                return "uv", ["run", "--python", "3.11", str(server_dir / "server.py")]
+        # Fallback to python3
+        elif (server_dir / "server.py").exists():
+            return "python3", [str(server_dir / "server.py")]
     
     # Check for traditional Python servers
     elif (server_dir / "server.py").exists():
