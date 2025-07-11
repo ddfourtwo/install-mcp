@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
+import shutil
+import platform
 
 from fastmcp import FastMCP
 
@@ -686,23 +688,32 @@ def add_server_to_central_config(
     
     IMPORTANT: Never pass actual secret values. Use collect_secrets() to securely collect them
     
-    COMMAND FORMATS BY SERVER TYPE:
+    PORTABLE COMMAND GUIDELINES (PREFER THESE):
     
-    1. NPM Package (from npm registry):
+    1. NPM Package (MOST PORTABLE - ALWAYS PREFER):
        add_server_to_central_config("server-name", "npx", '["-y", "@org/package@latest"]')
+       ✅ Works everywhere npm is installed
     
-    2. Local Node.js server:
-       add_server_to_central_config("server-name", "node", '["/Users/username/mcp-servers/server-name/index.js"]')
+    2. Python Package via uvx (PORTABLE):
+       add_server_to_central_config("server-name", "uvx", '["package-name@latest"]')
+       ✅ Works everywhere uv is installed
+    
+    3. System commands (node, python3) - USE ONLY WITH ABSOLUTE PATHS:
+       ❌ BAD:  add_server_to_central_config("server", "node", '["server.js"]')
+       ✅ GOOD: add_server_to_central_config("server", "node", '["/absolute/path/to/server.js"]')
        
-    3. Local Python server:
-       add_server_to_central_config("server-name", "python3", '["/Users/username/mcp-servers/server-name/server.py"]')
+    4. Local executables - ALWAYS USE ABSOLUTE PATHS:
+       ❌ BAD:  add_server_to_central_config("server", "uv", '["run", "..."]')
+       ✅ GOOD: add_server_to_central_config("server", "/Users/name/.local/bin/uv", '["run", "..."]')
     
-    4. Pre-built executable:
-       add_server_to_central_config("my-tool", "/path/to/executable", '[]')
+    COMMAND PRIORITY ORDER:
+    1. First choice: npx with npm packages
+    2. Second choice: uvx with Python packages  
+    3. Last resort: Absolute paths to executables
     
     Args:
         server_name: Unique identifier for the server (lowercase, hyphens ok)
-        command: The executable command (npx, node, python3, or full path)
+        command: The executable command (prefer: npx, uvx; avoid: relative paths)
         args: JSON array of arguments as a string (e.g., '["arg1", "arg2"]')
         required_env_vars: Optional JSON array of required environment variable names (e.g., '["API_KEY", "API_SECRET"]')
         env_vars: Optional JSON object of non-secret environment variables (e.g., '{"NODE_ENV": "production"}')
@@ -751,8 +762,39 @@ def add_server_to_central_config(
         "errors": []
     }
     
+    # Check for portability issues and provide warnings
+    portability_warnings = []
+    resolved_command = command
+    
+    # Define portable commands that work across platforms
+    portable_commands = ['npx', 'uvx', 'pipx']
+    
+    # Check if command is non-portable
+    if '/' not in command and command not in portable_commands:
+        # This is a relative command that's not in our portable list
+        if command in ['uv', 'python', 'python3', 'node', 'deno', 'bun']:
+            portability_warnings.append(f"⚠️  Command '{command}' may not be in PATH on all systems")
+            portability_warnings.append(f"   Consider using a portable alternative:")
+            if command == 'uv':
+                portability_warnings.append(f"   - Use 'uvx' instead for Python packages")
+                portability_warnings.append(f"   - Or use absolute path: {shutil.which(command) or '/path/to/uv'}")
+            elif command in ['python', 'python3']:
+                portability_warnings.append(f"   - Use 'uvx' for Python packages")
+                portability_warnings.append(f"   - Or use absolute path: {shutil.which(command) or '/path/to/python'}")
+            elif command == 'node':
+                portability_warnings.append(f"   - Use 'npx' for npm packages")
+                portability_warnings.append(f"   - Or use absolute path: {shutil.which(command) or '/path/to/node'}")
+            
+            # Try to resolve to absolute path as fallback
+            which_path = shutil.which(command)
+            if which_path:
+                resolved_command = which_path
+                portability_warnings.append(f"   ✓ Resolved to: {resolved_command}")
+            else:
+                portability_warnings.append(f"   ❌ WARNING: '{command}' not found in PATH!")
+    
     # Generate server configuration with placeholders for required env vars
-    server_config = get_server_config_template(server_name, command, args_parsed, required_env_vars_parsed)
+    server_config = get_server_config_template(server_name, resolved_command, args_parsed, required_env_vars_parsed)
     
     # Add any additional env vars provided
     if env_vars_parsed:
@@ -782,6 +824,10 @@ def add_server_to_central_config(
         "central_config_path": str(MCP_CENTRAL_CONFIG),
         "config_saved": server_config
     }
+    
+    # Add portability warnings if any
+    if portability_warnings:
+        result["portability_warnings"] = "\n".join(portability_warnings)
     
     # Add next steps
     next_steps = []
@@ -844,8 +890,21 @@ def sync_from_central_config() -> Dict[str, Any]:
                 
                 # Update all servers from central config
                 for server_name, server_info in central_config["servers"].items():
+                    # Special handling for install-mcp to prevent self-breaking
+                    if server_name == "install-mcp" and server_name in client_config.get('mcpServers', {}):
+                        # Check if current config is working (has full path)
+                        current_cmd = client_config['mcpServers'][server_name].get('command', '')
+                        central_cmd = server_info["config"].get('command', '')
+                        
+                        # If current has full path but central doesn't, preserve current
+                        if '/' in current_cmd and '/' not in central_cmd:
+                            # Skip updating install-mcp to prevent breaking it
+                            results["synced_servers"].append(f"{server_name} (preserved)")
+                            continue
+                    
                     # Resolve environment placeholders before updating client config
                     resolved_config = resolve_env_placeholders(server_info["config"], server_name)
+                    
                     client_config['mcpServers'][server_name] = resolved_config
                     if server_name not in results["synced_servers"]:
                         results["synced_servers"].append(server_name)
@@ -884,11 +943,20 @@ def list_mcp_servers() -> Dict[str, Any]:
     - Which ones are configured in MCP clients
     - Installation status and health
     
-    Common MCP server types you'll encounter:
-    - NPM packages (e.g., @upstash/context7-mcp) - use 'npx -y' command
-    - GitHub repos with Node.js (package.json) - clone, npm install, use 'node' command
-    - GitHub repos with Python (requirements.txt) - clone, pip install, use 'python3' command
-    - Pre-built executables - download and run directly
+    PORTABLE INSTALLATION GUIDELINES:
+    
+    ✅ PREFER THESE (Most Portable):
+    - NPM packages: use 'npx -y @org/package@latest' (works everywhere npm exists)
+    - Python packages: use 'uvx package-name@latest' (works everywhere uv exists)
+    
+    ⚠️  AVOID THESE (Less Portable):
+    - Direct 'node' commands without absolute paths
+    - Direct 'python'/'python3' commands without absolute paths
+    - Direct 'uv' commands (use 'uvx' instead)
+    
+    📍 If you MUST use non-portable commands:
+    - Always use absolute paths: '/full/path/to/executable'
+    - Never use relative paths that depend on PATH
     
     Always run this first to understand the current state before installing new servers.
     
