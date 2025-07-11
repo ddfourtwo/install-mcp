@@ -204,8 +204,8 @@ configs = {
 # Detect if uvx is available
 uvx_cmd = shutil.which('uvx')
 if uvx_cmd:
-    # Use uvx for portable execution
-    command = 'uvx'
+    # Use uvx for portable execution - use the full path that which() found
+    command = uvx_cmd
     args = ['--python', '3.11', '--with', 'mcp>=1.0.0', '--with', 'fastmcp>=0.1.0', 'python', str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
 else:
     # Check if uvx exists in common locations
