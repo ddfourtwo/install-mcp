@@ -45,6 +45,9 @@ if ! command -v uv &> /dev/null; then
     export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
+# Ensure ~/.local/bin is in PATH for uvx
+export PATH="$HOME/.local/bin:$PATH"
+
 # Create an __init__.py file to make it a package
 touch __init__.py
 
@@ -198,18 +201,36 @@ configs = {
     'windsurf': Path.home() / '.codeium/windsurf/mcp_config.json',
 }
 
-# Detect if uv is available
-uv_cmd = shutil.which('uv')
-if uv_cmd:
-    # Use uv if available
-    command = 'uv'
-    args = ['run', '--python', '3.11', '--with', 'mcp>=1.0.0', '--with', 'fastmcp>=0.1.0', str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
+# Detect if uvx is available
+uvx_cmd = shutil.which('uvx')
+if uvx_cmd:
+    # Use uvx for portable execution
+    command = 'uvx'
+    args = ['--python', '3.11', '--with', 'mcp>=1.0.0', '--with', 'fastmcp>=0.1.0', 'python', str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
 else:
-    # Fallback to python3 if uv is not available
-    print("⚠️  uv not found in PATH, using python3 directly")
-    print("   For better dependency management, install uv: https://github.com/astral-sh/uv")
-    command = 'python3'
-    args = [str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
+    # Check if uvx exists in common locations
+    common_uvx_paths = [
+        Path.home() / '.local/bin/uvx',
+        Path('/usr/local/bin/uvx'),
+        Path('/opt/homebrew/bin/uvx')
+    ]
+    
+    uvx_found = None
+    for uvx_path in common_uvx_paths:
+        if uvx_path.exists():
+            uvx_found = str(uvx_path)
+            break
+    
+    if uvx_found:
+        print(f"ℹ️  Found uvx at {uvx_found}")
+        command = uvx_found
+        args = ['--python', '3.11', '--with', 'mcp>=1.0.0', '--with', 'fastmcp>=0.1.0', 'python', str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
+    else:
+        # Fallback to python3 if uvx is not available
+        print("⚠️  uvx not found, using python3 directly")
+        print("   For better dependency management, install uv: https://github.com/astral-sh/uv")
+        command = 'python3'
+        args = [str(Path.home() / 'mcp-servers/install-mcp/meta_mcp_server.py')]
 
 updated = []
 for name, path in configs.items():
