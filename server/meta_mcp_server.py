@@ -11,6 +11,10 @@ from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 import shutil
 import platform
+import logging
+import traceback
+import signal
+from contextlib import contextmanager
 
 from fastmcp import FastMCP
 
@@ -19,6 +23,52 @@ mcp = FastMCP("install-mcp")
 
 # Determine base directory for MCP servers
 MCP_BASE_DIR = Path.home() / "mcp-servers"
+
+# Ensure base directory exists for logging
+MCP_BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Configure logging
+log_file = MCP_BASE_DIR / 'install-mcp.log'
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+@contextmanager
+def timeout(seconds):
+    """Context manager for timeouts using alarm signal"""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Operation timed out after {seconds} seconds")
+    
+    # Only works on Unix-like systems
+    if hasattr(signal, 'SIGALRM'):
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(seconds)
+        try:
+            yield
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    else:
+        # On Windows, just yield without timeout
+        yield
+
+def safe_which(command: str, timeout_seconds: int = 5) -> Optional[str]:
+    """Safely resolve command path with timeout"""
+    try:
+        with timeout(timeout_seconds):
+            return shutil.which(command)
+    except TimeoutError:
+        logger.warning(f"Timeout while resolving command '{command}'")
+        return None
+    except Exception as e:
+        logger.error(f"Error resolving command '{command}': {str(e)}")
+        return None
 
 # Central configuration file
 MCP_CENTRAL_CONFIG = MCP_BASE_DIR / "mcp-servers-config.json"
@@ -41,11 +91,15 @@ def load_central_config() -> Dict[str, Any]:
     if MCP_CENTRAL_CONFIG.exists():
         try:
             with open(MCP_CENTRAL_CONFIG, 'r') as f:
-                return json.load(f)
-        except:
+                config = json.load(f)
+                logger.debug(f"Loaded central config with {len(config.get('servers', {}))} servers")
+                return config
+        except Exception as e:
+            logger.error(f"Failed to load central config: {str(e)}", exc_info=True)
             pass
     
     # Return default structure
+    logger.debug("Creating default central config structure")
     return {
         "version": "1.0",
         "servers": {},
@@ -58,6 +112,8 @@ def load_central_config() -> Dict[str, Any]:
 def save_central_config(config: Dict[str, Any]) -> bool:
     """Save the central MCP configuration file"""
     try:
+        logger.info(f"Saving central config to {MCP_CENTRAL_CONFIG}")
+        
         # Update metadata
         config["metadata"]["last_updated"] = datetime.now().isoformat()
         
@@ -67,8 +123,13 @@ def save_central_config(config: Dict[str, Any]) -> bool:
         # Save with nice formatting
         with open(MCP_CENTRAL_CONFIG, 'w') as f:
             json.dump(config, f, indent=2)
+        
+        logger.info("Central config saved successfully")
         return True
     except Exception as e:
+        # Log the error properly with full traceback
+        error_msg = f"Failed to save central config: {str(e)}"
+        logger.error(error_msg, exc_info=True)
         return False
 
 def load_central_env() -> Dict[str, str]:
@@ -89,6 +150,8 @@ def load_central_env() -> Dict[str, str]:
 def save_to_central_env(key: str, value: str) -> bool:
     """Save a secret to the central .env file"""
     try:
+        logger.info(f"Saving environment variable {key} to central .env (value hidden)")
+        
         # Load existing env vars
         env_vars = load_central_env()
         
@@ -105,8 +168,10 @@ def save_to_central_env(key: str, value: str) -> bool:
         
         # Set restrictive permissions
         os.chmod(MCP_CENTRAL_ENV, 0o600)
+        logger.info(f"Successfully saved {key} to central .env")
         return True
     except Exception as e:
+        logger.error(f"Failed to save to central .env: {str(e)}", exc_info=True)
         return False
 
 def resolve_env_placeholders(config: Dict[str, Any], server_name: str = None) -> Dict[str, Any]:
@@ -306,6 +371,9 @@ def execute_in_mcp_directory(
     - For git clone: use working_dir="" and specify target in command
     - For other commands: use working_dir="server-name" to run inside that directory
     """
+    # Log command execution
+    logger.info(f"Executing command: {command} in working_dir: {working_dir or '(base)'}")
+    
     # Ensure we're only operating within the MCP directory
     if working_dir:
         work_path = MCP_BASE_DIR / working_dir
@@ -402,6 +470,7 @@ def execute_in_mcp_directory(
             
         return response
     except subprocess.TimeoutExpired:
+        logger.error(f"Command timed out after {timeout} seconds: {command}")
         return {
             "command": command,
             "working_directory": str(work_path),
@@ -409,10 +478,12 @@ def execute_in_mcp_directory(
             "success": False
         }
     except Exception as e:
+        logger.error(f"Command execution failed: {str(e)}", exc_info=True)
         return {
             "command": command,
             "working_directory": str(work_path),
             "error": str(e),
+            "traceback": traceback.format_exc(),
             "success": False
         }
 
@@ -445,10 +516,13 @@ def collect_secrets(
         # Multiple secrets
         collect_secrets("openai", '[{"name": "OPENAI_API_KEY", "description": "OpenAI API Key"}, {"name": "OPENAI_ORG_ID", "description": "OpenAI Organization ID"}]')
     """
+    logger.info(f"Collecting secrets for server: {server_name}")
+    
     # Parse JSON string input
     try:
         secrets_parsed = json.loads(secrets)
     except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in secrets parameter: {str(e)}")
         return {
             "success": False,
             "error": f"Invalid JSON in secrets parameter: {str(e)}",
@@ -583,10 +657,13 @@ def configure_mcp_clients(
     Example:
         configure_mcp_clients("sentry-selfhosted-mcp")
     """
+    logger.info(f"Configuring MCP clients for server: {server_name}")
+    
     # Load central config
     central_config = load_central_config()
     
     if server_name not in central_config.get("servers", {}):
+        logger.error(f"Server '{server_name}' not found in central configuration")
         return {
             "success": False,
             "error": f"Server '{server_name}' not found in central configuration",
@@ -632,8 +709,11 @@ def configure_mcp_clients(
                     json.dump(config, f, indent=2)
                 
                 results["updated_clients"].append(f"{client_name} (backup: {backup_path.name})")
+                logger.info(f"Successfully updated {client_name} configuration")
             except Exception as e:
-                results["errors"].append(f"{client_name}: {str(e)}")
+                error_msg = f"{client_name}: {str(e)}"
+                results["errors"].append(error_msg)
+                logger.error(f"Failed to update {client_name}", exc_info=True)
         else:
             results["skipped_clients"].append(f"{client_name} (not installed)")
     
@@ -721,10 +801,18 @@ def add_server_to_central_config(
     Returns:
         Status with next steps for collecting secrets and configuring clients
     """
+    logger.info(f"Adding server to central config: {server_name} with command: {command}")
+    logger.debug(f"Raw args: {args}")
+    logger.debug(f"Required env vars: {required_env_vars}")
+    logger.debug(f"Additional env vars: {env_vars}")
+    
     # Parse JSON inputs
     try:
+        logger.debug("Parsing args JSON...")
         args_parsed = json.loads(args)
+        logger.debug(f"Args parsed successfully: {args_parsed}")
     except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in args parameter: {str(e)}")
         return {
             "success": False,
             "error": f"Invalid JSON in args parameter: {str(e)}",
@@ -763,6 +851,7 @@ def add_server_to_central_config(
     }
     
     # Check for portability issues and provide warnings
+    logger.debug("Checking command portability...")
     portability_warnings = []
     resolved_command = command
     
@@ -771,49 +860,62 @@ def add_server_to_central_config(
     
     # Check if command is non-portable
     if '/' not in command and command not in portable_commands:
+        logger.debug(f"Command '{command}' is not portable, checking alternatives...")
         # This is a relative command that's not in our portable list
         if command in ['uv', 'python', 'python3', 'node', 'deno', 'bun']:
             portability_warnings.append(f"⚠️  Command '{command}' may not be in PATH on all systems")
             portability_warnings.append(f"   Consider using a portable alternative:")
             if command == 'uv':
                 portability_warnings.append(f"   - Use 'uvx' instead for Python packages")
-                portability_warnings.append(f"   - Or use absolute path: {shutil.which(command) or '/path/to/uv'}")
+                portability_warnings.append(f"   - Or use absolute path: {safe_which(command) or '/path/to/uv'}")
             elif command in ['python', 'python3']:
                 portability_warnings.append(f"   - Use 'uvx' for Python packages")
-                portability_warnings.append(f"   - Or use absolute path: {shutil.which(command) or '/path/to/python'}")
+                portability_warnings.append(f"   - Or use absolute path: {safe_which(command) or '/path/to/python'}")
             elif command == 'node':
                 portability_warnings.append(f"   - Use 'npx' for npm packages")
-                portability_warnings.append(f"   - Or use absolute path: {shutil.which(command) or '/path/to/node'}")
+                portability_warnings.append(f"   - Or use absolute path: {safe_which(command) or '/path/to/node'}")
             
             # Try to resolve to absolute path as fallback
-            which_path = shutil.which(command)
+            logger.debug(f"Attempting to resolve '{command}' with safe_which()...")
+            which_path = safe_which(command, timeout_seconds=5)
+            logger.debug(f"safe_which() returned: {which_path}")
             if which_path:
                 resolved_command = which_path
                 portability_warnings.append(f"   ✓ Resolved to: {resolved_command}")
             else:
-                portability_warnings.append(f"   ❌ WARNING: '{command}' not found in PATH!")
+                portability_warnings.append(f"   ❌ WARNING: '{command}' not found in PATH or resolution timed out!")
     
     # Generate server configuration with placeholders for required env vars
+    logger.debug("Generating server config template...")
     server_config = get_server_config_template(server_name, resolved_command, args_parsed, required_env_vars_parsed)
+    logger.debug(f"Server config: {server_config}")
     
     # Add any additional env vars provided
     if env_vars_parsed:
+        logger.debug(f"Adding additional env vars: {env_vars_parsed}")
         if "env" not in server_config:
             server_config["env"] = {}
         server_config["env"].update(env_vars_parsed)
     
     # Update central configuration
+    logger.debug("Loading central configuration...")
     central_config = load_central_config()
+    logger.debug(f"Central config has {len(central_config.get('servers', {}))} servers")
+    
     central_config["servers"][server_name] = {
         "name": server_name,
         "config": server_config,
         "installed_at": datetime.now().isoformat(),
         "required_env_vars": required_env_vars_parsed or []
     }
+    
+    logger.debug("Saving central configuration...")
     if not save_central_config(central_config):
         return {
             "success": False,
-            "error": "Failed to save central configuration"
+            "error": "Failed to save central configuration",
+            "details": "Check server logs for specific error",
+            "log_path": str(MCP_BASE_DIR / 'install-mcp.log')
         }
     
     # Build result
@@ -840,6 +942,7 @@ def add_server_to_central_config(
         next_steps.append(f"1. Configure clients: configure_mcp_clients('{server_name}')")
     
     result["next_steps"] = next_steps
+    logger.info(f"Successfully completed add_server_to_central_config for {server_name}")
     return result
 
 @mcp.tool()
@@ -1264,7 +1367,14 @@ def export_mcp_setup() -> Dict[str, Any]:
 
 def main():
     """Main entry point for the server"""
-    mcp.run()
+    try:
+        logger.info("Starting install-mcp server...")
+        mcp.run()
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested by user")
+    except Exception as e:
+        logger.error(f"Server crashed: {str(e)}", exc_info=True)
+        raise
 
 # Run the server
 if __name__ == "__main__":
