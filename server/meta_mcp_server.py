@@ -7,10 +7,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 import shutil
-import platform
 import logging
 import traceback
 import signal
@@ -143,7 +142,7 @@ def load_central_env() -> Dict[str, str]:
                     if line and not line.startswith('#') and '=' in line:
                         key, value = line.split('=', 1)
                         env_vars[key.strip()] = value.strip()
-        except:
+        except Exception:
             pass
     return env_vars
 
@@ -168,7 +167,7 @@ def save_to_central_env(key: str, value: str) -> bool:
         
         # Set restrictive permissions
         os.chmod(MCP_CENTRAL_ENV, 0o600)
-        logger.info(f"Successfully saved {key} to central .env")
+        logger.info("Successfully saved %s to central .env" % key)
         return True
     except Exception as e:
         logger.error(f"Failed to save to central .env: {str(e)}", exc_info=True)
@@ -219,6 +218,80 @@ def get_server_config_template(server_name: str, command: str, args: List[str],
             config["env"][var] = f"{var}.env"
     
     return config
+
+def validate_server_config(server_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate a server configuration and return diagnostics
+    
+    Returns:
+        Dictionary with validation results and any warnings/errors
+    """
+    diagnostics = {
+        "valid": True,
+        "warnings": [],
+        "errors": [],
+        "checks": {}
+    }
+    
+    # Check command exists
+    command = config.get("command", "")
+    if not command:
+        diagnostics["errors"].append("No command specified")
+        diagnostics["valid"] = False
+    else:
+        # Check if command is portable
+        if command in ['npx', 'uvx', 'pipx']:
+            diagnostics["checks"]["command_portability"] = "portable"
+        elif '/' in command:
+            diagnostics["checks"]["command_portability"] = "absolute_path"
+            # Check if the absolute path exists
+            if not Path(command).exists():
+                diagnostics["warnings"].append(f"Command path '{command}' does not exist on this system")
+        else:
+            diagnostics["checks"]["command_portability"] = "non_portable"
+            # Try to resolve command
+            resolved = safe_which(command)
+            if resolved:
+                diagnostics["checks"]["command_resolved"] = resolved
+            else:
+                diagnostics["warnings"].append(f"Command '{command}' not found in PATH")
+    
+    # Check args format
+    args = config.get("args", [])
+    if not isinstance(args, list):
+        diagnostics["errors"].append("Args must be a list")
+        diagnostics["valid"] = False
+    
+    # Check environment variables
+    env = config.get("env", {})
+    if env:
+        unresolved_vars = []
+        central_env = load_central_env()
+        
+        for key, value in env.items():
+            if isinstance(value, str) and value.endswith('.env'):
+                # This is a placeholder
+                base_key = value[:-4]
+                namespaced_key = f"{server_name.upper().replace('-', '_')}_{base_key}"
+                
+                # Check if it's resolved in central env
+                if namespaced_key not in central_env and base_key not in central_env:
+                    unresolved_vars.append(key)
+        
+        if unresolved_vars:
+            diagnostics["warnings"].append(f"Unresolved environment variables: {', '.join(unresolved_vars)}")
+            diagnostics["checks"]["env_vars_resolved"] = False
+        else:
+            diagnostics["checks"]["env_vars_resolved"] = True
+    
+    # Check if server directory exists (for local installations)
+    if command not in ['npx', 'uvx', 'pipx'] and args and not args[0].startswith('-'):
+        # First arg might be a path to a script
+        script_path = args[0]
+        if '/' in script_path and not Path(script_path).exists():
+            diagnostics["warnings"].append(f"Script path '{script_path}' does not exist")
+    
+    return diagnostics
 
 def generate_test_prompts(server_name: str, command: str, args: List[str]) -> List[str]:
     """Generate test prompts based on server name and type"""
@@ -289,7 +362,7 @@ def determine_installation_source(server_dir: Path) -> Dict[str, Any]:
                 git_url = result.stdout.strip()
                 info["installation_type"] = "git"
                 info["source_url"] = git_url
-        except:
+        except Exception:
             pass
     
     # Check for npm package
@@ -302,7 +375,7 @@ def determine_installation_source(server_dir: Path) -> Dict[str, Any]:
                     info["installation_type"] = "npm"
                     info["npm_package"] = package_name
                     info["server_type"] = "node"
-        except:
+        except Exception:
             pass
         
         if "installation_type" not in info:
@@ -324,7 +397,7 @@ def determine_installation_source(server_dir: Path) -> Dict[str, Any]:
                 env_vars = re.findall(r'^([A-Z_]+)=', env_content, re.MULTILINE)
                 if env_vars:
                     info["required_secrets"] = env_vars
-        except:
+        except Exception:
             pass
     
     return info
@@ -354,6 +427,13 @@ def execute_in_mcp_directory(
     3. NPM packages (published to npm):
        - No installation needed!
        - Just configure with: command="npx", args=["-y", "@org/package-name@latest"]
+    
+    IMPORTANT TRANSPORT TYPE NOTES:
+    - Most MCP servers use 'stdio' transport (default)
+    - Some Python servers use 'sse' transport (Server-Sent Events)
+    - Check the server's README or documentation for transport type
+    - If unsure, try 'stdio' first, then 'sse' if it fails
+    - SSE servers typically run on a port (e.g., http://localhost:3000)
     
     4. Check installation:
        - execute_in_mcp_directory("ls -la", "server-name")
@@ -434,7 +514,7 @@ def execute_in_mcp_directory(
                     })
                     with open(history_file, 'w') as f:
                         json.dump(history, f, indent=2)
-        except:
+        except Exception:
             pass
         
         # Determine next action based on command
@@ -721,6 +801,12 @@ def configure_mcp_clients(
     if results["success"]:
         results["message"] = f"✅ Successfully configured {server_name} in {len(results['updated_clients'])} clients"
         
+        # Validate the configuration
+        validation = validate_server_config(server_name, server_config)
+        if validation["warnings"]:
+            results["configuration_warnings"] = validation["warnings"]
+        results["validation"] = validation
+        
         # Add test prompts
         command = server_config.get("command", "")
         args = server_config.get("args", [])
@@ -730,7 +816,7 @@ def configure_mcp_clients(
         # Build next steps
         next_steps = [
             "1. Restart your MCP client (Claude Desktop, Cursor, Windsurf, etc.)",
-            f"2. Test with one of these prompts:",
+            "2. Test with one of these prompts:",
             *[f"   - {prompt}" for prompt in test_prompts],
             "3. Check if the server responds correctly"
         ]
@@ -790,6 +876,18 @@ def add_server_to_central_config(
     1. First choice: npx with npm packages
     2. Second choice: uvx with Python packages  
     3. Last resort: Absolute paths to executables
+    
+    TRANSPORT TYPE CONFIGURATION:
+    - Most servers use stdio transport (default) - no special config needed
+    - SSE servers need: add transport type to client config manually after running configure_mcp_clients
+    - SSE example: "transport": { "type": "sse", "url": "http://localhost:3000" }
+    - Check server's README for transport requirements
+    
+    ABOUT UV/UVX:
+    - This server uses uv, the fast Python package manager
+    - Our installer ensures uv is installed and in your PATH
+    - uvx can run any Python tool instantly without manual installs
+    - Learn more: https://github.com/astral-sh/uv
     
     Args:
         server_name: Unique identifier for the server (lowercase, hyphens ok)
@@ -926,6 +1024,12 @@ def add_server_to_central_config(
         "central_config_path": str(MCP_CENTRAL_CONFIG),
         "config_saved": server_config
     }
+    
+    # Validate the saved configuration
+    validation = validate_server_config(server_name, server_config)
+    result["validation"] = validation
+    if validation["warnings"]:
+        result["configuration_warnings"] = validation["warnings"]
     
     # Add portability warnings if any
     if portability_warnings:
@@ -1158,16 +1262,16 @@ def list_mcp_servers() -> Dict[str, Any]:
             
             # If we have command history, use that for precise replication
             if server.get("installation_history"):
-                replication_instructions.append(f"\n   {server_name}:")
+                replication_instructions.append("\n   %s:" % server_name)
                 for step in server.get("installation_steps", []):
-                    replication_instructions.append(f"      - {step}")
+                    replication_instructions.append("      - %s" % step)
             elif server.get("installation_type") == "npm" and server.get("npm_package"):
                 # NPM packages don't need installation, just configuration
-                replication_instructions.append(f"\n   {server_name}: No installation needed, just configure")
+                replication_instructions.append("\n   %s: No installation needed, just configure" % server_name)
             elif server.get("installation_type") == "git" and server.get("source_url"):
-                replication_instructions.append(f"\n   {server_name}: Clone from {server['source_url']}")
+                replication_instructions.append("\n   %s: Clone from %s" % (server_name, server['source_url']))
             else:
-                replication_instructions.append(f"\n   {server_name}: Check configuration details below")
+                replication_instructions.append("\n   %s: Check configuration details below" % server_name)
     
     # Check central config status
     central_config = load_central_config()
@@ -1290,8 +1394,8 @@ def export_mcp_setup() -> Dict[str, Any]:
         
         # Installation commands
         if server.get("git_url"):
-            instructions.append(f"```bash")
-            instructions.append(f"# Clone the repository")
+            instructions.append("```bash")
+            instructions.append("# Clone the repository")
             instructions.append(f"execute_in_mcp_directory('git clone {server['git_url']} {server['name']}', '')")
             
             # Add other installation commands

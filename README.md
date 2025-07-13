@@ -15,6 +15,8 @@ Install MCP is a meta-MCP server that enables AI agents to install, configure, a
 
 ## 📦 Installation
 
+Our installer automatically sets up `uv` (the fast Python package manager) and configures everything for you.
+
 ### macOS/Linux
 ```bash
 curl -sSL https://raw.githubusercontent.com/ddfourtwo/install-mcp/main/install.sh | bash
@@ -24,6 +26,13 @@ curl -sSL https://raw.githubusercontent.com/ddfourtwo/install-mcp/main/install.s
 ```powershell
 powershell -c "irm https://raw.githubusercontent.com/ddfourtwo/install-mcp/main/install.ps1 | iex"
 ```
+
+### What the installer does:
+- ✅ Installs `uv` if not present (blazing fast Python package manager)
+- ✅ Adds `uv` to your PATH permanently
+- ✅ Downloads and configures install-mcp
+- ✅ Sets up the server to use `uvx` for instant startup
+- ✅ Configures all your MCP clients automatically
 
 After installation:
 1. Restart your MCP client (Claude Desktop, Cursor, etc.)
@@ -58,6 +67,22 @@ Once installed, just ask your AI assistant:
 
 - [Architecture Guide](docs/ARCHITECTURE.md) - Technical overview with diagrams
 - [API Reference](docs/API_REFERENCE.md) - Detailed documentation of all available tools
+
+## 🚀 Why uv?
+
+We use [uv](https://github.com/astral-sh/uv) as our Python package manager because it's:
+- **10-100x faster** than pip - installs complete in seconds, not minutes
+- **Universal** - single binary that works everywhere
+- **Modern** - built in Rust with proper dependency resolution
+- **Convenient** - `uvx` works just like `npx` for running Python tools
+
+After our installer runs, you can use `uvx` anywhere:
+```bash
+# Run any Python tool instantly
+uvx ruff check
+uvx black --version
+uvx install-mcp  # This server!
+```
 
 ## 🛠️ How It Works
 

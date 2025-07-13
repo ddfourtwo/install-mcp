@@ -49,8 +49,20 @@ try {
 
 # Check if uv is installed
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "📦 Installing uv..." -ForegroundColor Yellow
+    Write-Host "📦 Installing uv (Python package manager)..." -ForegroundColor Yellow
     Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+    
+    # Add uv to PATH permanently for Windows
+    $uvPath = "$env:USERPROFILE\.cargo\bin"
+    $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($currentPath -notlike "*$uvPath*") {
+        Write-Host "📝 Adding uv to your PATH..." -ForegroundColor Yellow
+        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$uvPath", "User")
+        $env:Path = "$env:Path;$uvPath"
+        Write-Host "✅ Added uv to PATH" -ForegroundColor Green
+    }
+} else {
+    Write-Host "✅ uv is already installed" -ForegroundColor Green
 }
 
 # Create __init__.py

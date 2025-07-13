@@ -39,10 +39,38 @@ curl -sSL "https://raw.githubusercontent.com/$GITHUB_USER/$GITHUB_REPO/$GITHUB_B
 
 # Check if uv is installed
 if ! command -v uv &> /dev/null; then
-    echo "📦 Installing uv..."
+    echo "📦 Installing uv (Python package manager)..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
+    
     # Add uv to PATH for current session
     export PATH="$HOME/.cargo/bin:$PATH"
+    
+    # Ensure uv is in PATH permanently
+    echo ""
+    echo "📝 Adding uv to your PATH..."
+    
+    # Detect shell and update appropriate config file
+    if [[ "$SHELL" == *"zsh"* ]]; then
+        SHELL_CONFIG="$HOME/.zshrc"
+    elif [[ "$SHELL" == *"bash"* ]]; then
+        if [[ -f "$HOME/.bash_profile" ]]; then
+            SHELL_CONFIG="$HOME/.bash_profile"
+        else
+            SHELL_CONFIG="$HOME/.bashrc"
+        fi
+    else
+        SHELL_CONFIG="$HOME/.profile"
+    fi
+    
+    # Add to PATH if not already there
+    if ! grep -q '.cargo/bin' "$SHELL_CONFIG" 2>/dev/null; then
+        echo '' >> "$SHELL_CONFIG"
+        echo '# Added by install-mcp installer' >> "$SHELL_CONFIG"
+        echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$SHELL_CONFIG"
+        echo "✅ Added uv to PATH in $SHELL_CONFIG"
+    fi
+else
+    echo "✅ uv is already installed"
 fi
 
 # Ensure ~/.local/bin is in PATH for uvx
@@ -181,8 +209,31 @@ fi
 # Update MCP client configurations using the updater
 echo "⚙️  Configuring MCP clients..."
 # Try to use the updater if available, but don't fail if it has issues
-(mcp-config-update install-mcp --command uv --args run --python 3.11 --with 'mcp>=1.0.0' --with 'fastmcp>=0.1.0' "$HOME/mcp-servers/install-mcp/meta_mcp_server.py" 2>/dev/null || \
- ~/.local/bin/mcp-config-update install-mcp --command uv --args run --python 3.11 --with 'mcp>=1.0.0' --with 'fastmcp>=0.1.0' "$HOME/mcp-servers/install-mcp/meta_mcp_server.py" 2>/dev/null || \
+# First, let's create a simple Python package structure for uvx
+echo "📦 Creating package structure for uvx compatibility..."
+cat > ~/mcp-servers/install-mcp/pyproject.toml << 'EOF'
+[project]
+name = "install-mcp"
+version = "1.0.0"
+description = "Meta MCP server for managing other MCP servers"
+dependencies = [
+    "mcp>=1.0.0",
+    "fastmcp>=0.1.0",
+]
+requires-python = ">=3.8"
+
+[project.scripts]
+install-mcp = "meta_mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+EOF
+
+# Try multiple configuration approaches
+(mcp-config-update install-mcp --command uvx --args "$HOME/mcp-servers/install-mcp" 2>/dev/null || \
+ ~/.local/bin/mcp-config-update install-mcp --command uvx --args "$HOME/mcp-servers/install-mcp" 2>/dev/null || \
+ mcp-config-update install-mcp --command uv --args run --python 3.11 --with 'mcp>=1.0.0' --with 'fastmcp>=0.1.0' "$HOME/mcp-servers/install-mcp/meta_mcp_server.py" 2>/dev/null || \
  true)
 
 # Always run the direct Python configuration as backup
